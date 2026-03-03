@@ -1,40 +1,54 @@
-name: Multi-Arch Docker Build
+name: Manual Build & Package Docker Image
 
 on:
-  push:
-    branches: [ "master", "main" ]
   workflow_dispatch:
+    inputs:
+      platform:
+        description: '选择构建平台 (Select Platform)'
+        required: true
+        default: 'amd64'
+        type: choice
+        options:
+          - amd64
+          - arm64
+          - both
 
 jobs:
-  build-multi-arch:
+  build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 1. 关键：设置 QEMU 模拟器，支持跨架构编译
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
-      # 2. 设置 Buildx
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 3. 同时构建两个架构并导出
-      # 注意：由于 save 不直接支持多架构 manifest，我们通常分别构建或直接推送到 Registry
-      # 如果非要本地导出，可以分别导出两个 tar 包
-      - name: Build for x86 and ARM
+      - name: Build and Export
         run: |
-          docker buildx build --platform linux/amd64 -t fakehttp:amd64 --load .
-          docker save fakehttp:amd64 | gzip > fakehttp_amd64.tar.gz
+          platforms="${{ github.event.inputs.platform }}"
           
-          docker buildx build --platform linux/arm64 -t fakehttp:arm64 --load .
-          docker save fakehttp:arm64 | gzip > fakehttp_arm64.tar.gz
+          # 定义构建函数
+          build_fn() {
+            local arch=$1
+            local platform_str="linux/$arch"
+            echo "正在构建架构: $platform_str"
+            docker buildx build --platform "$platform_str" -t "fakehttp:$arch" --load .
+            docker save "fakehttp:$arch" | gzip > "fakehttp_${arch}.tar.gz"
+          }
+
+          if [ "$platforms" == "both" ]; then
+            build_fn "amd64"
+            build_fn "arm64"
+          else
+            build_fn "$platforms"
+          fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: fakehttp-multi-arch-images
-          path: |
-            fakehttp_amd64.tar.gz
-            fakehttp_arm64.tar.gz
+          name: fakehttp-binaries-${{ github.event.inputs.platform }}
+          path: "*.tar.gz"
+          retention-days: 5
