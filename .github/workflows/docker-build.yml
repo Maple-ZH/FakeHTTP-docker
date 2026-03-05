@@ -1,12 +1,16 @@
-name: Manual Build & Package Multi-Arch
+name: Build & Release Docker Images
 
 on:
   workflow_dispatch:
     inputs:
-      platform:
-        description: '选择构建平台 (Select Platform)'
+      version:
+        description: '版本号 (例如 v1.0.0)'
         required: true
-        default: 'amd64'
+        default: 'v1.0.0'
+      platform:
+        description: '选择架构'
+        required: true
+        default: 'both'
         type: choice
         options:
           - amd64
@@ -14,8 +18,10 @@ on:
           - both
 
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 必须赋予写入权限以创建 Release
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -26,43 +32,31 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and Export
+      - name: Build and Package
         run: |
-          # 定义构建逻辑函数
-          build_and_save() {
+          build_fn() {
             local arch=$1
-            echo "开始构建架构: linux/$arch"
-            
-            # 1. 构建镜像并加载到本地 Docker 守护进程
-            # 注意：--load 模式不支持同时构建多架构，所以必须分开执行
-            docker buildx build \
-              --platform "linux/$arch" \
-              -t "fakehttp:$arch" \
-              --load .
-            
-            # 2. 将镜像保存为压缩包，文件名区分架构
+            echo "Building for linux/$arch..."
+            docker buildx build --platform "linux/$arch" -t "fakehttp:$arch" --load .
             docker save "fakehttp:$arch" | gzip > "fakehttp_${arch}.tar.gz"
-            echo "架构 $arch 打包完成: fakehttp_${arch}.tar.gz"
           }
 
-          # 根据输入决定构建流程
-          case "${{ github.event.inputs.platform }}" in
-            "amd64")
-              build_and_save "amd64"
-              ;;
-            "arm64")
-              build_and_save "arm64"
-              ;;
-            "both")
-              build_and_save "amd64"
-              build_and_save "arm64"
-              ;;
-          esac
+          if [ "${{ github.event.inputs.platform }}" == "both" ]; then
+            build_fn "amd64"
+            build_fn "arm64"
+          else
+            build_fn "${{ github.event.inputs.platform }}"
+          fi
 
-      - name: Upload Artifacts
-        uses: actions/upload-artifact@v4
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v1
         with:
-          name: fakehttp-docker-packages-${{ github.event.inputs.platform }}
-          # 使用通配符匹配所有生成的 .tar.gz 文件
-          path: "*.tar.gz"
-          retention-days: 5
+          tag_name: ${{ github.event.inputs.version }}
+          name: Release ${{ github.event.inputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            fakehttp_amd64.tar.gz
+            fakehttp_arm64.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
