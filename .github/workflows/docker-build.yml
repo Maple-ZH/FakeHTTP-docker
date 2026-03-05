@@ -1,4 +1,4 @@
-name: Manual Build & Package Docker Image
+name: Manual Build & Package Multi-Arch
 
 on:
   workflow_dispatch:
@@ -28,27 +28,41 @@ jobs:
 
       - name: Build and Export
         run: |
-          platforms="${{ github.event.inputs.platform }}"
-          
-          # 定义构建函数
-          build_fn() {
+          # 定义构建逻辑函数
+          build_and_save() {
             local arch=$1
-            local platform_str="linux/$arch"
-            echo "正在构建架构: $platform_str"
-            docker buildx build --platform "$platform_str" -t "fakehttp:$arch" --load .
+            echo "开始构建架构: linux/$arch"
+            
+            # 1. 构建镜像并加载到本地 Docker 守护进程
+            # 注意：--load 模式不支持同时构建多架构，所以必须分开执行
+            docker buildx build \
+              --platform "linux/$arch" \
+              -t "fakehttp:$arch" \
+              --load .
+            
+            # 2. 将镜像保存为压缩包，文件名区分架构
             docker save "fakehttp:$arch" | gzip > "fakehttp_${arch}.tar.gz"
+            echo "架构 $arch 打包完成: fakehttp_${arch}.tar.gz"
           }
 
-          if [ "$platforms" == "both" ]; then
-            build_fn "amd64"
-            build_fn "arm64"
-          else
-            build_fn "$platforms"
-          fi
+          # 根据输入决定构建流程
+          case "${{ github.event.inputs.platform }}" in
+            "amd64")
+              build_and_save "amd64"
+              ;;
+            "arm64")
+              build_and_save "arm64"
+              ;;
+            "both")
+              build_and_save "amd64"
+              build_and_save "arm64"
+              ;;
+          esac
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: fakehttp-binaries-${{ github.event.inputs.platform }}
+          name: fakehttp-docker-packages-${{ github.event.inputs.platform }}
+          # 使用通配符匹配所有生成的 .tar.gz 文件
           path: "*.tar.gz"
           retention-days: 5
